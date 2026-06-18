@@ -107,6 +107,25 @@ def test_get_location_exception(mock_nominatim, weather_service):
 
 
 @patch('weather_frame.weather_service.Nominatim')
+def test_get_location_exception_not_cached(mock_nominatim, weather_service):
+    """A transient failure returns the default but must NOT be cached, so a
+    later call can succeed (regression: cache poisoning)."""
+    mock_geolocator = MagicMock()
+    mock_location = MagicMock()
+    mock_location.raw = {'address': {'city': 'Leiden'}}
+    # First reverse() raises, second succeeds.
+    mock_geolocator.reverse.side_effect = [Exception("transient"), mock_location]
+    mock_nominatim.return_value = mock_geolocator
+
+    first = weather_service.get_location(52.16, 4.49)
+    second = weather_service.get_location(52.16, 4.49)
+
+    assert first == DEFAULT_LOCATION
+    assert second == 'Leiden'
+    assert mock_geolocator.reverse.call_count == 2  # retried, not served from cache
+
+
+@patch('weather_frame.weather_service.Nominatim')
 def test_get_location_is_cached(mock_nominatim, weather_service):
     """Same coordinates must hit Nominatim only once (usage-policy friendly)."""
     mock_geolocator = MagicMock()

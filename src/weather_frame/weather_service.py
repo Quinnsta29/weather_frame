@@ -43,7 +43,10 @@ class WeatherService:
                 else:
                     location_name = location.address.split(',')[0]
         except Exception as e:
+            # Transient failure (network/timeout): return the default but do NOT
+            # cache it, so a later call can retry instead of being stuck forever.
             logger.error(f"Error getting location: {e}")
+            return DEFAULT_LOCATION
 
         self._location_cache[key] = location_name
         return location_name
@@ -88,6 +91,11 @@ class WeatherService:
 
         try:
             data = self.fetch_weather()
+            # Atomic whole-dict reference swap: the scheduler thread writes here
+            # while the Flask thread reads via get_cached_data(). Under CPython's
+            # GIL the reader always sees either the old or the new dict, never a
+            # half-built one. If this ever mutates the cached dict in place
+            # (field-level updates) instead of replacing it, add a lock.
             self.cache = self.process_weather_data(data)
             return True
         except Exception as e:

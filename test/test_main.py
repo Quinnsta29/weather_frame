@@ -41,19 +41,18 @@ def test_dashboard_unavailable(client, monkeypatch):
 
 
 def test_refresh_returns_204(client, monkeypatch):
-    """/refresh triggers an update and returns an empty 204."""
-    called = {"n": 0}
+    """/refresh triggers an update (in a background thread) and returns 204."""
+    from threading import Event
+    done = Event()
 
-    def fake_update():
-        called["n"] += 1
-
-    monkeypatch.setattr(main, "update_weather_and_display", fake_update)
+    monkeypatch.setattr(main, "update_weather_and_display", done.set)
 
     resp = client.get("/refresh")
 
     assert resp.status_code == 204
     assert resp.get_data() == b""
-    assert called["n"] == 1
+    # Update runs asynchronously; it must fire shortly after the response.
+    assert done.wait(timeout=2.0)
 
 
 def test_refresh_header_present_on_index(client, monkeypatch, processed_data):

@@ -1,7 +1,7 @@
 import time
 import atexit
 from datetime import datetime, timedelta
-from threading import Lock
+from threading import Lock, Thread
 
 from flask import Flask, render_template, request
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -26,24 +26,13 @@ def update_weather_and_display():
     with NEXT_API_CALL_LOCK:
         NEXT_API_CALL_TIME = datetime.now().replace(second=0, microsecond=0) + timedelta(hours=1)
 
+    # One line per update (~24/day) instead of a per-minute countdown heartbeat.
+    logger.info(f"Weather update run; next scheduled at {NEXT_API_CALL_TIME:%H:%M}")
+
     if weather_service.update_weather_data():
         # Wait a bit for the web page to update with new data
         time.sleep(2)
         display_service.update_display_async()
-
-def log_minutes_until_next_api_call():
-    """Log the minutes until the next API call"""
-    global NEXT_API_CALL_TIME
-    with NEXT_API_CALL_LOCK:
-        if NEXT_API_CALL_TIME:
-            now = datetime.now()
-            minutes_left = int((NEXT_API_CALL_TIME - now).total_seconds() // 60)
-            if minutes_left > 0:
-                logger.info(f"{minutes_left} minutes until next API call")
-            else:
-                logger.info(f"API call is imminent or overdue (scheduled {NEXT_API_CALL_TIME})")
-        else:
-            logger.info("Next API call time not set yet")
 
 @app.route("/")
 def dashboard():
@@ -73,9 +62,13 @@ def dashboard():
 
 @app.route("/refresh")
 def refresh():
-    """Manual refresh endpoint"""
-    update_weather_and_display()
-    logger.info("Weather data refreshed")
+    """Manual refresh endpoint.
+
+    Runs the update in a background thread so the HTTP response isn't blocked
+    by the API fetch + the 2s settle sleep in update_weather_and_display.
+    """
+    Thread(target=update_weather_and_display).start()
+    logger.info("Manual weather refresh triggered")
     return "", 204
 
 @app.after_request
@@ -100,7 +93,6 @@ scheduler = BackgroundScheduler()
 def _start_scheduler():
     """Register jobs and start the background scheduler."""
     scheduler.add_job(func=update_weather_and_display, trigger="interval", hours=1)
-    scheduler.add_job(func=log_minutes_until_next_api_call, trigger="interval", minutes=1)
     scheduler.start()
     atexit.register(lambda: scheduler.shutdown())
 
