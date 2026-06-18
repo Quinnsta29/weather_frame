@@ -1,16 +1,20 @@
-import locale
 import time
 import atexit
-from datetime import datetime
-from flask import Flask, render_template, request
+from datetime import datetime, timedelta
+from threading import Lock, Thread
+
+from flask import Flask, jsonify, render_template, request
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from weather_frame import logger
 from weather_frame.display_service import DisplayService
 from weather_frame.weather_service import WeatherService
-from weather_frame.utils import get_weather_icon
+from weather_frame.utils import get_weather_icon, format_dutch_date, dutch_weekday_abbr
 
 app = Flask(__name__)
+
+NEXT_API_CALL_TIME = None
+NEXT_API_CALL_LOCK = Lock()
 
 # Initialize services
 weather_service = WeatherService()
@@ -18,6 +22,13 @@ display_service = DisplayService()
 
 def update_weather_and_display():
     """Update weather data and display"""
+    global NEXT_API_CALL_TIME
+    with NEXT_API_CALL_LOCK:
+        NEXT_API_CALL_TIME = datetime.now().replace(second=0, microsecond=0) + timedelta(hours=1)
+
+    # One line per update (~24/day) instead of a per-minute countdown heartbeat.
+    logger.info(f"Weather update run; next scheduled at {NEXT_API_CALL_TIME:%H:%M}")
+
     if weather_service.update_weather_data():
         # Wait a bit for the web page to update with new data
         time.sleep(2)
@@ -25,40 +36,63 @@ def update_weather_and_display():
 
 @app.route("/")
 def dashboard():
-    # Set Dutch locale
-    try:
-        locale.setlocale(locale.LC_TIME, 'nl_NL')
-    except locale.Error:
-        try:
-            locale.setlocale(locale.LC_TIME, 'nl_NL.UTF-8')
-        except locale.Error:
-            logger.warning("Dutch locale not available, falling back to default")
-    
     # Use cached data if available, otherwise fetch it
     weather_data = weather_service.get_cached_data()
     if not weather_data:
         weather_service.update_weather_data()
         weather_data = weather_service.get_cached_data()
 
-    # Format locale-dependent data
-    if weather_data and 'current' in weather_data:
-        current_time = weather_data['current']['time_obj']
-        weather_data['current']['formatted_date'] = current_time.strftime('%A %d %B').capitalize()
-        
-        if 'daily' in weather_data and 'time_objects' in weather_data['daily']:
-            dutch_days = []
-            for day_obj in weather_data['daily']['time_objects']:
-                day_name = day_obj.strftime('%A')[:2].upper()  # First 2 letters, uppercase
-                dutch_days.append(day_name)
-            weather_data['daily']['time'] = dutch_days
-    
+    # No data available (API unreachable on first load): render a fallback
+    # instead of crashing the template on undefined variables.
+    if not weather_data or 'current' not in weather_data:
+        logger.warning("No weather data available, rendering unavailable page")
+        return render_template("unavailable.html"), 503
+
+    # Format Dutch date strings (locale-free; see weather_frame.utils).
+    current_time = weather_data['current']['time_obj']
+    weather_data['current']['formatted_date'] = format_dutch_date(current_time)
+
+    if 'daily' in weather_data and 'time_objects' in weather_data['daily']:
+        weather_data['daily']['time'] = [
+            dutch_weekday_abbr(day_obj)
+            for day_obj in weather_data['daily']['time_objects']
+        ]
+
     return render_template("index.html", **weather_data)
 
 @app.route("/refresh")
 def refresh():
-    """Manual refresh endpoint"""
-    update_weather_and_display()
-    logger.info("Weather data refreshed")
+    """Manual refresh endpoint.
+
+    Runs the update in a background thread so the HTTP response isn't blocked
+    by the API fetch + the 2s settle sleep in update_weather_and_display.
+    """
+    Thread(target=update_weather_and_display).start()
+    logger.info("Manual weather refresh triggered")
+    return "", 204
+
+@app.route("/status")
+def status():
+    """Health/observability endpoint.
+
+    Lets you check from any device on the LAN whether the frame is alive, when it
+    last fetched, and when the next fetch is due -- no SSH needed. Returns 200 when
+    data is cached, 503 when the frame is up but has no weather data yet.
+    """
+    cache = weather_service.get_cached_data()
+    last_updated = cache.get("last_updated") if cache else None
+
+    with NEXT_API_CALL_LOCK:
+        next_api_call = NEXT_API_CALL_TIME
+
+    has_data = bool(cache and "current" in cache)
+    payload = {
+        "status": "ok" if has_data else "no_data",
+        "has_data": has_data,
+        "last_updated": last_updated.isoformat() if last_updated else None,
+        "next_api_call": next_api_call.isoformat() if next_api_call else None,
+    }
+    return jsonify(payload), (200 if has_data else 503)
 
 @app.after_request
 def add_refresh_header(response):
@@ -74,12 +108,18 @@ app.jinja_env.globals.update(
     get_weather_icon=get_weather_icon
 )
 
-# Initialize the scheduler
+# Scheduler is created lazily and only started when run as a program (see
+# _start_scheduler). This keeps `import weather_frame.main` side-effect-free so
+# the Flask app can be imported by the test suite without spawning live jobs.
 scheduler = BackgroundScheduler()
-scheduler.add_job(func=update_weather_and_display, trigger="interval", hours=1)
-scheduler.start()
-atexit.register(lambda: scheduler.shutdown())
+
+def _start_scheduler():
+    """Register jobs and start the background scheduler."""
+    scheduler.add_job(func=update_weather_and_display, trigger="interval", hours=1)
+    scheduler.start()
+    atexit.register(lambda: scheduler.shutdown())
 
 if __name__ == "__main__":
+    _start_scheduler()
     update_weather_and_display()  # Initial data fetch
     app.run(host='0.0.0.0', port=8080, debug=False)

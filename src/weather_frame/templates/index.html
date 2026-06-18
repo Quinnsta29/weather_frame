@@ -5,7 +5,7 @@
   <title>Weather Dashboard</title>
   <meta name="viewport" content="width=800, height=480, initial-scale=1.0, user-scalable=no">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}"></script>
   <script src="{{ url_for('static', filename='chart.js') }}"></script>
 </head>
 <body>
@@ -48,21 +48,9 @@
     const currentHourIndex = {{ current_hour_index }};
     createHourlyChart(hourlyData, currentHourIndex);
 
-    // Check if weather data is stale and force refresh if needed
-    function checkFreshness() {
-      const now = new Date();
-      const lastUpdated = new Date("{{ last_updated }}");
-      const hoursSinceUpdate = (now - lastUpdated) / (1000 * 60 * 60);
-      
-      if (hoursSinceUpdate > 1.1) {
-        console.log("Weather data is stale, refreshing...");
-        fetch("/refresh").then(() => window.location.reload());
-      }
-    }
-    
-    // Check freshness on page load and every 5 minutes
-    checkFreshness();
-    setInterval(checkFreshness, 5 * 60 * 1000);
+    // Data fetches + e-ink updates are driven solely by the backend scheduler
+    // (see main.py). The page passively reloads each hour via the `Refresh`
+    // response header to re-render the latest cache — it never triggers a fetch.
   </script>
 </body>
 </html>

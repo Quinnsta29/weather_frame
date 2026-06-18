@@ -1,0 +1,26 @@
+name: Deploy
+
+# Fires when the Tests workflow finishes on main. The `workflow_run` trigger lets
+# us reuse the existing test run (no duplicate test job) and only deploy when it
+# went green -- see the `if` guard on the job below.
+on:
+  workflow_run:
+    workflows: ["Tests"]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: deploy-pi
+  cancel-in-progress: false   # never interrupt an in-flight deploy
+
+jobs:
+  deploy:
+    # Only deploy when the triggering Tests run actually passed.
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: [self-hosted, rpi]   # the Pi runner; `rpi` label added at registration
+    steps:
+      # No actions/checkout: we operate on the fixed deployment clone the service
+      # runs from (an absolute path), not the runner's scratch _work dir. The
+      # script resets that clone to the exact commit that passed tests.
+      - name: Deploy to Pi
+        run: /home/pi/WeatherFrame/weather-frame/scripts/deploy.sh "${{ github.event.workflow_run.head_sha }}"

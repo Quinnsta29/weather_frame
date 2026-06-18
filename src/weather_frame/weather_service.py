@@ -5,35 +5,51 @@ from geopy.geocoders import Nominatim
 from weather_frame import logger
 from weather_frame.config.api_config import API_URL, PARAMS
 
+DEFAULT_LOCATION = "Leiden"
+
 class WeatherService:
     def __init__(self):
         self.cache = {}
-    
+        # Reverse-geocoding cache: coordinates are effectively static, so we hit
+        # Nominatim at most once per (lat, long) instead of every hourly update
+        # (their usage policy forbids heavy automated querying).
+        self._location_cache = {}
+
     def fetch_weather(self, api_url=API_URL, params=PARAMS):
         """Fetch weather data from API"""
-        r = requests.get(api_url, params=params)
+        r = requests.get(api_url, params=params, timeout=10)
         r.raise_for_status()
         return r.json()
-    
+
     def get_location(self, lat, long):
-        """Get location name from coordinates"""
+        """Get location name from coordinates, cached per coordinate pair."""
+        key = (round(lat, 4), round(long, 4))
+        if key in self._location_cache:
+            return self._location_cache[key]
+
+        location_name = DEFAULT_LOCATION
         try:
             geolocator = Nominatim(user_agent="weather-frame", timeout=10)
             location = geolocator.reverse(f"{lat}, {long}", language='nl')
-            
+
             if location:
                 address = location.raw['address']
                 if 'city' in address:
-                    return address['city']
+                    location_name = address['city']
                 elif 'town' in address:
-                    return address['town']
+                    location_name = address['town']
                 elif 'village' in address:
-                    return address['village']
+                    location_name = address['village']
                 else:
-                    return location.address.split(',')[0]
+                    location_name = location.address.split(',')[0]
         except Exception as e:
+            # Transient failure (network/timeout): return the default but do NOT
+            # cache it, so a later call can retry instead of being stuck forever.
             logger.error(f"Error getting location: {e}")
-            return "Leiden"
+            return DEFAULT_LOCATION
+
+        self._location_cache[key] = location_name
+        return location_name
     
     def process_weather_data(self, data):
         """Process and format weather data"""
@@ -75,6 +91,11 @@ class WeatherService:
 
         try:
             data = self.fetch_weather()
+            # Atomic whole-dict reference swap: the scheduler thread writes here
+            # while the Flask thread reads via get_cached_data(). Under CPython's
+            # GIL the reader always sees either the old or the new dict, never a
+            # half-built one. If this ever mutates the cached dict in place
+            # (field-level updates) instead of replacing it, add a lock.
             self.cache = self.process_weather_data(data)
             return True
         except Exception as e:
