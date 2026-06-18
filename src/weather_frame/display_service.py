@@ -1,7 +1,7 @@
 import os
 import platform
 import subprocess
-from threading import Thread
+from threading import Lock, Thread
 
 from PIL import Image
 
@@ -17,6 +17,11 @@ class DisplayService:
         self.screenshots_dir = os.path.join(os.path.dirname(__file__), 'screenshots')
         os.makedirs(self.screenshots_dir, exist_ok=True)
         self.screenshot_path = os.path.join(self.screenshots_dir, 'screenshot.png')
+
+        # An e-ink write takes seconds and is not reentrant; concurrent screenshot
+        # + show() calls (overlapping refreshes) would corrupt the panel. Hold this
+        # for the whole screenshot->display cycle and skip if already running.
+        self._update_lock = Lock()
         
         # Snapshot the debug state per-instance so tests can flip it (and the
         # injected `inky` mock) without re-importing the module.
@@ -114,6 +119,11 @@ class DisplayService:
     
     def take_screenshot_and_update_display(self):
         """Take a screenshot of the weather dashboard using headless Chromium."""
+        # Non-blocking: if a previous update is still running, skip this one rather
+        # than queueing a second concurrent Chromium + e-ink write.
+        if not self._update_lock.acquire(blocking=False):
+            logger.info("Display update already in progress, skipping")
+            return False
         try:
             url = "http://localhost:8080"
             
@@ -159,7 +169,9 @@ class DisplayService:
         except Exception as e:
             logger.error(f"Error taking screenshot: {e}")
             return False
-    
+        finally:
+            self._update_lock.release()
+
     def update_display_async(self):
         """Update display in a separate thread"""
         Thread(target=self.take_screenshot_and_update_display).start()

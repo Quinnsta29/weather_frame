@@ -3,7 +3,7 @@ import atexit
 from datetime import datetime, timedelta
 from threading import Lock, Thread
 
-from flask import Flask, render_template, request
+from flask import Flask, jsonify, render_template, request
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from weather_frame import logger
@@ -70,6 +70,29 @@ def refresh():
     Thread(target=update_weather_and_display).start()
     logger.info("Manual weather refresh triggered")
     return "", 204
+
+@app.route("/status")
+def status():
+    """Health/observability endpoint.
+
+    Lets you check from any device on the LAN whether the frame is alive, when it
+    last fetched, and when the next fetch is due -- no SSH needed. Returns 200 when
+    data is cached, 503 when the frame is up but has no weather data yet.
+    """
+    cache = weather_service.get_cached_data()
+    last_updated = cache.get("last_updated") if cache else None
+
+    with NEXT_API_CALL_LOCK:
+        next_api_call = NEXT_API_CALL_TIME
+
+    has_data = bool(cache and "current" in cache)
+    payload = {
+        "status": "ok" if has_data else "no_data",
+        "has_data": has_data,
+        "last_updated": last_updated.isoformat() if last_updated else None,
+        "next_api_call": next_api_call.isoformat() if next_api_call else None,
+    }
+    return jsonify(payload), (200 if has_data else 503)
 
 @app.after_request
 def add_refresh_header(response):
