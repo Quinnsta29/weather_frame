@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 User=pi
-WorkingDirectory=/home/pi/weather-frame/src
-ExecStart=/usr/bin/python3 -m weather_frame.main
+WorkingDirectory=/home/pi/WeatherFrame/weather-frame/src
+ExecStart=/home/pi/WeatherFrame/weather-frame/.venv/bin/python -m weather_frame.main
 Restart=always
 RestartSec=10
 Environment="DEBUG_MODE=0"
