@@ -18,9 +18,14 @@ class DisplayService:
         os.makedirs(self.screenshots_dir, exist_ok=True)
         self.screenshot_path = os.path.join(self.screenshots_dir, 'screenshot.png')
         
+        # Snapshot the debug state per-instance so tests can flip it (and the
+        # injected `inky` mock) without re-importing the module.
+        self.debug_mode = DEBUG_MODE
+
         # Initialize inky display if not in debug mode
-        if not DEBUG_MODE:
-            self.inky = auto(ask_user=True, verbose=True)
+        if not self.debug_mode:
+            # ask_user=False: no TTY under systemd, an interactive prompt would hang boot.
+            self.inky = auto(ask_user=False, verbose=True)
         else:
             self.inky = None
     
@@ -87,7 +92,7 @@ class DisplayService:
             filepath: Path to the screenshot file.
             saturation: Color saturation level (default: 0.0)
         """
-        if DEBUG_MODE or not self.inky:
+        if self.debug_mode or not self.inky:
             logger.info(f"Debug mode: Would display {filepath} on e-ink display")
             return
         

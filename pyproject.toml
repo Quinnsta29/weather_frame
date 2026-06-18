@@ -12,3 +12,19 @@ dependencies = [
     "pytest>=8.4.1",
     "requests>=2.32.4",
 ]
+
+[project.optional-dependencies]
+# Raspberry Pi only — drives the Inky Impression e-ink panel (ARM-only wheels).
+# Install on the Pi with:  uv pip install -e ".[pi]"
+pi = [
+    "inky>=1.5.0",
+]
+# Development / CI extras.
+dev = [
+    "pytest-cov>=5.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["test"]
+addopts = "-q"

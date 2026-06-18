@@ -5,7 +5,7 @@
   <title>Weather Dashboard</title>
   <meta name="viewport" content="width=800, height=480, initial-scale=1.0, user-scalable=no">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}"></script>
   <script src="{{ url_for('static', filename='chart.js') }}"></script>
 </head>
 <body>
@@ -51,7 +51,7 @@
     // Check if weather data is stale and force refresh if needed
     function checkFreshness() {
       const now = new Date();
-      const lastUpdated = new Date("{{ last_updated }}");
+      const lastUpdated = new Date("{{ last_updated.isoformat() }}");
       const hoursSinceUpdate = (now - lastUpdated) / (1000 * 60 * 60);
       
       if (hoursSinceUpdate > 1.1) {
